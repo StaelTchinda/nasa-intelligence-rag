@@ -1,79 +1,189 @@
-import chromadb
-from chromadb.config import Settings
-from typing import Dict, List, Optional
+"""ChromaDB discovery, retrieval, and source-context formatting."""
+
+import math
+import os
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any, Callable, List, Optional
 
-def discover_chroma_backends() -> Dict[str, Dict[str, str]]:
-    """Discover available ChromaDB backends in the project directory"""
-    backends = {}
-    current_dir = Path(".")
-    
-    # Look for ChromaDB directories
-    # TODO: Create list of directories that match specific criteria (directory type and name pattern)
+import chromadb
+from chromadb.api.models import Collection as chromadb_collection
+import chromadb.api.types as chromadb_types
+from openai import OpenAI
 
-    # TODO: Loop through each discovered directory
-        # TODO: Wrap connection attempt in try-except block for error handling
-        
-            # TODO: Initialize database client with directory path and configuration settings
-            
-            # TODO: Retrieve list of available collections from the database
-            
-            # TODO: Loop through each collection found
-                # TODO: Create unique identifier key combining directory and collection names
-                # TODO: Build information dictionary containing:
-                    # TODO: Store directory path as string
-                    # TODO: Store collection name
-                    # TODO: Create user-friendly display name
-                    # TODO: Get document count with fallback for unsupported operations
-                # TODO: Add collection information to backends dictionary
-        
-        # TODO: Handle connection or access errors gracefully
-            # TODO: Create fallback entry for inaccessible directories
-            # TODO: Include error information in display name with truncation
-            # TODO: Set appropriate fallback values for missing information
+from src.rag_types import (
+    ChromaBackend,
+    ChromaCollection,
+    Metadata,
+    RetrievalCollection,
+    RetrievalResult,
+    normalize_retrieval_result,
+)
 
-    # TODO: Return complete backends dictionary with all discovered collections
 
-def initialize_rag_system(chroma_dir: str, collection_name: str):
-    """Initialize the RAG system with specified backend (cached for performance)"""
+DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
+MAX_CONTEXT_EXCERPT_LENGTH = 2000
 
-    # TODO: Create a chomadb persistentclient
-    # TODO: Return the collection with the collection_name
 
-def retrieve_documents(collection, query: str, n_results: int = 3, 
-                      mission_filter: Optional[str] = None) -> Optional[Dict]:
+def discover_chroma_backends() -> dict[str, ChromaBackend]:
+    """Discover immediate project-child ChromaDB directories and collections."""
+    backends: dict[str, ChromaBackend] = {}
+    for directory in sorted(Path(".").iterdir()):
+        if not directory.is_dir() or not directory.name.startswith("chroma_db"):
+            continue
+
+        directory_path = str(directory)
+        try:
+            directory_path = str(directory.resolve())
+            client = chromadb.PersistentClient(path=directory_path)
+            for collection in client.list_collections():
+                try:
+                    document_count = collection.count()
+                    error = None
+                except Exception as collection_error:
+                    document_count = "Unknown"
+                    error = str(collection_error)
+
+                key = f"{directory.name}:{collection.name}"
+                display_name = (
+                    f"{directory.name} / {collection.name} "
+                    f"({document_count} documents)"
+                )
+                if error:
+                    display_name += f" - count unavailable: {error[:120]}"
+                backends[key] = {
+                    "directory": directory_path,
+                    "collection_name": collection.name,
+                    "display_name": display_name,
+                    "document_count": document_count,
+                }
+        except Exception as error:
+            key = f"{directory.name}:error"
+            backends[key] = {
+                "directory": directory_path,
+                "collection_name": "",
+                "display_name": f"{directory.name} - error: {str(error)[:160]}",
+                "document_count": "Unknown",
+            }
+    return backends
+
+
+def initialize_rag_system(
+    chroma_dir: str, collection_name: str
+) -> tuple[chromadb_collection.Collection, bool, Optional[str]]:
+    """Open a persistent ChromaDB collection for retrieval."""
+    client = chromadb.PersistentClient(path=chroma_dir)
+    collection = client.get_collection(name=collection_name)
+    return collection, True, None
+
+
+# TODO: It does not look good to have the embedding model selection logic in the retrieval function. 
+#  Consider moving it to a separate function or configuration.
+def retrieve_documents(
+    collection: chromadb_collection.Collection,
+    query: str,
+    n_results: int = 3,
+    mission_filter: Optional[str] = None,
+    openai_key: Optional[str] = None,
+    embedding_model: Optional[str] = None,
+    openai_base_url: Optional[str] = None,
+) -> chromadb.QueryResult:
     """Retrieve relevant documents from ChromaDB with optional filtering"""
+    """Retrieve top matching chunks using the index's configured embedding model."""
+    if not isinstance(n_results, int) or n_results <= 0:
+        raise ValueError("n_results must be a positive integer")
+    if not isinstance(query, str) or not query.strip():
+        raise ValueError("query must be a non-empty string")
+    if embedding_model is not None and not embedding_model.strip():
+        raise ValueError("embedding_model must be a non-empty string")
+    selected_embedding_model = (
+        embedding_model
+        or (collection.metadata or {}).get("embedding_model")
+        or DEFAULT_EMBEDDING_MODEL
+    )
 
-    # TODO: Initialize filter variable to None (represents no filtering)
+    api_key = (
+        openai_key
+        or os.getenv("CHROMA_OPENAI_API_KEY")
+        or os.getenv("OPENAI_API_KEY")
+    )
+    if not api_key:
+        raise ValueError(
+            "An API key is required for query embeddings; set "
+            "CHROMA_OPENAI_API_KEY or OPENAI_API_KEY"
+        )
 
-    # TODO: Check if filter parameter exists and is not set to "all" or equivalent
-    # TODO: If filter conditions are met, create filter dictionary with appropriate field-value pairs
+    client_options: dict[str, str] = {}
+    if openai_base_url:
+        client_options["base_url"] = openai_base_url
+    embedding_response = OpenAI(api_key=api_key, **client_options).embeddings.create(
+        model=selected_embedding_model,
+        input=query,
+    )
+    try:
+        query_embedding = embedding_response.data[0].embedding
+    except (AttributeError, IndexError, TypeError) as error:
+        raise ValueError("Embedding provider returned a malformed response") from error
+    if not query_embedding:
+        raise ValueError("Embedding provider returned an empty embedding")
+    if not all(
+        not isinstance(value, bool)
+        and isinstance(value, (int, float))
+        and math.isfinite(value)
+        for value in query_embedding
+    ):
+        raise ValueError("Embedding provider returned an invalid embedding vector")
 
-    # TODO: Execute database query with the following parameters:
-        # TODO: Pass search query in the required format
-        # TODO: Set maximum number of results to return
-        # TODO: Apply conditional filter (None for no filtering, dictionary for specific filtering)
+    where: Optional[chromadb_types.Where] = None
+    normalized_mission = mission_filter.strip() if mission_filter else ""
+    if normalized_mission and normalized_mission.lower() != "all":
+        where = {"mission": normalized_mission}
 
-    # TODO: Return query results to caller
+    query_result = collection.query(
+        query_embeddings=[query_embedding],
+        n_results=n_results,
+        where=where,
+        include=["documents", "metadatas", "distances"],
+    )
+    return query_result
 
-def format_context(documents: List[str], metadatas: List[Dict]) -> str:
-    """Format retrieved documents into context"""
-    if not documents:
+
+def format_context(
+    documents: List[str],
+    metadatas: List[chromadb_types.Metadata],
+) -> str:
+    """Format retrieved excerpts with stable source labels and attribution."""
+    if not documents or not metadatas:
         return ""
-    
-    # TODO: Initialize list with header text for context section
+    if len(documents) != len(metadatas):
+        raise ValueError(
+            "Documents and metadatas must have the same length for formatting"
+        )
 
-    # TODO: Loop through paired documents and their metadata using enumeration
-        # TODO: Extract mission information from metadata with fallback value
-        # TODO: Clean up mission name formatting (replace underscores, capitalize)
-        # TODO: Extract source information from metadata with fallback value  
-        # TODO: Extract category information from metadata with fallback value
-        # TODO: Clean up category name formatting (replace underscores, capitalize)
-        
-        # TODO: Create formatted source header with index number and extracted information
-        # TODO: Add source header to context parts list
-        
-        # TODO: Check document length and truncate if necessary
-        # TODO: Add truncated or full document content to context parts list
+    context_parts = ["Retrieved NASA source excerpts:"]
+    metadata_values = metadatas or []
+    for index, document in enumerate(documents, start=1):
+        get_metadata: Callable[[str], Optional[Any]] = lambda key: (
+            metadata_values[index - 1].get(key)
+            if index - 1 < len(metadata_values) and (key in metadata_values[index - 1])
+            else None
+        )
+        mission = str(get_metadata("mission") or "Unknown")
+        mission_label = mission.replace("_", " ").title()
+        source = str(get_metadata("source") or get_metadata("file_path") or "Unknown")
+        category = str(
+            get_metadata("document_category")
+            or "Unknown"
+        ).replace("_", " ").title()
+        excerpt = document or ""
+        if len(excerpt) > MAX_CONTEXT_EXCERPT_LENGTH:
+            excerpt = excerpt[: MAX_CONTEXT_EXCERPT_LENGTH - 3].rstrip() + "..."
 
-    # TODO: Join all context parts with newlines and return formatted string
+        context_parts.extend(
+            [
+                f"[Source {index}] Mission: {mission_label}; "
+                f"Document: {source}; Category: {category}",
+                excerpt,
+            ]
+        )
+    return "\n".join(context_parts)

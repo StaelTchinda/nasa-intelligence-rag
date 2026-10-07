@@ -6,22 +6,32 @@ Enhanced version of the simple RAG chat that includes real-time evaluation
 and feedback collection for continuous improvement.
 """
 
-import streamlit as st
 import os
-import json
-import pandas as pd
+from collections.abc import Mapping, Sequence
+from typing import Optional, cast, List
+
+import chromadb
+from chromadb.api.models import Collection as chromadb_collection
+import chromadb.api.types as chromadb_types
+import streamlit as st
 
 import src.ragas_evaluator as ragas_evaluator
 import src.rag_client as rag_client
 import src.llm_client as llm_client
 
-from pathlib import Path
-from typing import Dict, List, Optional
+from src.rag_types import (
+    ChromaBackend,
+    ChromaCollection,
+    ConversationTurn,
+    Metadata,
+    RetrievalResult,
+)
 
 # RAGAS imports
 try:
-    from ragas import SingleTurnSample
-    RAGAS_AVAILABLE = True
+    import ragas
+
+    RAGAS_AVAILABLE = ragas is not None
 except ImportError:
     RAGAS_AVAILABLE = False
     st.warning("RAGAS not available. Install with: pip install ragas")
@@ -33,13 +43,15 @@ st.set_page_config(
     layout="wide"
 )
 
-def discover_chroma_backends() -> Dict[str, Dict[str, str]]:
+def discover_chroma_backends() -> dict[str, ChromaBackend]:
     """Discover available ChromaDB backends in the project directory"""
 
     return rag_client.discover_chroma_backends()
 
 #@st.cache_resource
-def initialize_rag_system(chroma_dir: str, collection_name: str):
+def initialize_rag_system(
+    chroma_dir: str, collection_name: str
+) -> tuple[Optional[chromadb_collection.Collection], bool, Optional[str]]:
     """Initialize the RAG system with specified backend (cached for performance)"""
 
     try:
@@ -47,8 +59,12 @@ def initialize_rag_system(chroma_dir: str, collection_name: str):
     except Exception as e:
         return None, False, str(e)
 
-def retrieve_documents(collection, query: str, n_results: int = 3, 
-                      mission_filter: Optional[str] = None) -> Optional[Dict]:
+def retrieve_documents(
+    collection: chromadb_collection.Collection,
+    query: str,
+    n_results: int = 3,
+    mission_filter: Optional[str] = None,
+) -> Optional[chromadb.QueryResult]:
     """Retrieve relevant documents from ChromaDB with optional filtering"""
     try:
         return rag_client.retrieve_documents(collection, query, n_results, mission_filter)
@@ -56,27 +72,39 @@ def retrieve_documents(collection, query: str, n_results: int = 3,
         st.error(f"Error retrieving documents: {e}")
         return None
 
-def format_context(documents: List[str], metadatas: List[Dict]) -> str:
+def format_context(documents: List[str], metadatas: List[chromadb_types.Metadata]) -> str:
     """Format retrieved documents into context"""
     
     return rag_client.format_context(documents, metadatas)
 
-def generate_response(openai_key, user_message: str, context: str, 
-                     conversation_history: List[Dict], model: str = "gpt-3.5-turbo") -> str:
+def generate_response(
+    openai_key: str,
+    user_message: str,
+    context: str,
+    conversation_history: List[ConversationTurn],
+    model: str = "gpt-3.5-turbo",
+    openai_base_url: Optional[str] = None,
+) -> str:
     """Generate response using OpenAI with context"""
-    try:
-        return llm_client.generate_response(openai_key, user_message, context, conversation_history, model)
-    except Exception as e:
-        return f"Error generating response: {e}"
+    return llm_client.generate_response(
+        openai_key,
+        user_message,
+        context,
+        conversation_history,
+        model,
+        openai_base_url=openai_base_url,
+    )
 
-def evaluate_response_quality(question: str, answer: str, contexts: List[str]) -> Dict[str, float]:
+def evaluate_response_quality(
+    question: str, answer: str, contexts: Sequence[str]
+) -> dict[str, float | str]:
     """Evaluate response quality using RAGAS metrics"""
     try:
         return ragas_evaluator.evaluate_response_quality(question, answer, contexts)
     except Exception as e:
         return {"error": f"Evaluation failed: {str(e)}"}
 
-def display_evaluation_metrics(scores: Dict[str, float]):
+def display_evaluation_metrics(scores: Mapping[str, float | str]) -> None:
     """Display evaluation metrics in the sidebar"""
     if "error" in scores:
         st.sidebar.error(f"Evaluation Error: {scores['error']}")
@@ -86,14 +114,6 @@ def display_evaluation_metrics(scores: Dict[str, float]):
     
     for metric_name, score in scores.items():
         if isinstance(score, (int, float)):
-            # Color code based on score
-            if score >= 0.8:
-                color = "green"
-            elif score >= 0.6:
-                color = "orange"
-            else:
-                color = "red"
-            
             st.sidebar.metric(
                 label=metric_name.replace('_', ' ').title(),
                 value=f"{score:.3f}",
@@ -103,7 +123,7 @@ def display_evaluation_metrics(scores: Dict[str, float]):
             # Add progress bar
             st.sidebar.progress(score)
 
-def main():
+def main() -> None:
     st.title("🚀 NASA Space Mission Chat with Evaluation")
     st.markdown("Chat with AI about NASA space missions with real-time quality evaluation")
     
@@ -116,6 +136,7 @@ def main():
         st.session_state.last_evaluation = None
     if "last_contexts" not in st.session_state:
         st.session_state.last_contexts = []
+    messages = cast(list[ConversationTurn], st.session_state.messages)
     
     # Sidebar for configuration
     with st.sidebar:
@@ -187,23 +208,24 @@ def main():
             selected_backend["collection_name"]
         )
     
-    if not success:
+    if not success or collection is None:
         st.error(f"Failed to initialize RAG system: {error}")
         st.stop()
     
     # Display evaluation metrics if available
-    if st.session_state.last_evaluation and enable_evaluation:
-        display_evaluation_metrics(st.session_state.last_evaluation)
+    last_evaluation = st.session_state.last_evaluation
+    if last_evaluation and enable_evaluation:
+        display_evaluation_metrics(cast(Mapping[str, float | str], last_evaluation))
     
     # Display chat messages
-    for message in st.session_state.messages:
+    for message in messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
     
     # Chat input
     if prompt := st.chat_input("Ask about NASA space missions..."):
         # Add user message to chat history
-        st.session_state.messages.append({"role": "user", "content": prompt})
+        messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
         
@@ -219,10 +241,18 @@ def main():
                 
                 # Format context
                 context = ""
-                contexts_list = []
-                if docs_result and docs_result.get("documents"):
-                    context = format_context(docs_result["documents"][0], docs_result["metadatas"][0])
-                    contexts_list = docs_result["documents"][0]
+                contexts_list: list[str] = []
+                if docs_result and docs_result["documents"] and docs_result["metadatas"]:
+                    retrieved_documents = docs_result["documents"][0]
+                    retrieved_metadatas = docs_result["metadatas"][0]
+                    context = format_context(
+                        retrieved_documents, retrieved_metadatas
+                    )
+                    contexts_list = [
+                        document
+                        for document in retrieved_documents
+                        if document is not None
+                    ]
                     st.session_state.last_contexts = contexts_list
                 
                 # Generate response
@@ -230,7 +260,7 @@ def main():
                     openai_key, 
                     prompt, 
                     context, 
-                    st.session_state.messages[:-1],
+                    messages[:-1],
                     model_choice
                 )
                 st.markdown(response)
@@ -246,7 +276,7 @@ def main():
                         st.session_state.last_evaluation = evaluation_scores
         
         # Add assistant response to chat history
-        st.session_state.messages.append({"role": "assistant", "content": response})
+        messages.append({"role": "assistant", "content": response})
         st.rerun()
 
 
