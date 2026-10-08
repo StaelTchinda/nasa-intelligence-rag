@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, List, Tuple, cast
@@ -7,6 +8,18 @@ import pytest
 
 from src.embedding_pipeline import ChromaEmbeddingPipelineTextOnly, UpdateMode, main
 from src.rag_types import ChromaInclude, Metadata, RetrievalResult
+
+
+@pytest.mark.unit
+def test_http_request_logs_are_suppressed_without_hiding_pipeline_info(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO)
+    logging.getLogger("httpx").info("HTTP Request: POST /v1/embeddings")
+    logging.getLogger("src.embedding_pipeline").info("Pipeline summary")
+
+    assert "HTTP Request" not in caplog.text
+    assert "Pipeline summary" in caplog.text
 
 
 def _embedding_response_for_text(model: str, input: str) -> Any:
@@ -523,6 +536,155 @@ def test_process_all_text_data_with_no_files_returns_zero_counts(
     assert stats["documents_added"] == 0
     assert stats["errors"] == 0
     assert stats["missions"] == {}
+
+
+@pytest.mark.unit
+def test_process_all_text_data_reports_progress_and_totals(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pipeline = _pipeline()
+    failed_file = tmp_path / "apollo11" / "broken.txt"
+    good_file = tmp_path / "apollo13" / "good.txt"
+    progress_options: dict[str, Any] = {}
+
+    class RecordingProgress:
+        def __init__(self, **kwargs: Any) -> None:
+            progress_options.update(kwargs)
+            self.descriptions: list[str] = []
+            self.postfixes: list[str] = []
+            self.updates: list[int] = []
+            self.events: list[str] = []
+
+        def __enter__(self) -> "RecordingProgress":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def set_description(self, description: str) -> None:
+            self.descriptions.append(description)
+
+        def set_postfix_str(self, value: str, **kwargs: Any) -> None:
+            self.postfixes.append(value)
+            self.events.append("postfix")
+
+        def update(self, count: int) -> None:
+            self.updates.append(count)
+            self.events.append("update")
+
+    progress = RecordingProgress()
+
+    def create_progress(**kwargs: Any) -> RecordingProgress:
+        progress_options.update(kwargs)
+        return progress
+
+    monkeypatch.setattr(
+        "src.embedding_pipeline.tqdm",
+        create_progress,
+        raising=False,
+    )
+
+    def scan_files(_: str) -> list[Path]:
+        return [failed_file, good_file]
+
+    monkeypatch.setattr(pipeline, "scan_text_files_only", scan_files)
+
+    def process_text_file(file_path: Path) -> list[tuple[str, Metadata]]:
+        if file_path == failed_file:
+            raise OSError("cannot read document")
+        return [
+            (
+                f"Apollo 13 source chunk {chunk_index}.",
+                {
+                    "mission": "apollo_13",
+                    "source": "good",
+                    "chunk_index": chunk_index,
+                },
+            )
+            for chunk_index in range(3)
+        ]
+
+    monkeypatch.setattr(pipeline, "process_text_file", process_text_file)
+
+    def add_documents(
+        documents: list[tuple[str, Metadata]],
+        file_path: Path,
+        update_mode: UpdateMode = "skip",
+        progress_callback: Any = None,
+    ) -> dict[str, int]:
+        result = {"added": 1, "updated": 1, "skipped": 1}
+        if progress_callback is not None:
+            progress_callback(result)
+        return result
+
+    monkeypatch.setattr(
+        pipeline,
+        "add_documents_to_collection",
+        add_documents,
+    )
+
+    stats = pipeline.process_all_text_data(str(tmp_path))
+
+    assert progress_options["total"] == 2
+    assert progress.updates == [1, 1]
+    assert progress.events == ["postfix", "update", "postfix", "update"]
+    assert "Reading/chunking: broken.txt" in progress.descriptions
+    assert "Embedding/indexing: good.txt" in progress.descriptions
+    assert "files=2/2" in progress.postfixes[-1]
+    assert "chunks=3" in progress.postfixes[-1]
+    assert "added=1" in progress.postfixes[-1]
+    assert "updated=1" in progress.postfixes[-1]
+    assert "skipped=1" in progress.postfixes[-1]
+    assert "errors=1" in progress.postfixes[-1]
+    assert "avg/file=" in progress.postfixes[-1]
+    assert "{remaining}" in progress_options["bar_format"]
+    assert stats["errors"] == 1
+    assert stats["files_processed"] == 1
+    assert stats["total_chunks"] == 3
+    assert stats["documents_updated"] == 1
+    assert stats["documents_skipped"] == 1
+
+
+@pytest.mark.unit
+def test_process_all_text_data_keeps_confirmed_counts_on_index_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pipeline = _pipeline()
+    file_path = tmp_path / "apollo11" / "mission.txt"
+    documents = [("Apollo 11 source.", {"mission": "apollo_11", "source": "mission"})]
+
+    def scan_files(_: str) -> list[Path]:
+        return [file_path]
+
+    def process_text_file(_: Path) -> list[tuple[str, Metadata]]:
+        return documents
+
+    monkeypatch.setattr(pipeline, "scan_text_files_only", scan_files)
+    monkeypatch.setattr(pipeline, "process_text_file", process_text_file)
+
+    def fail_after_storing_one_document(
+        documents: list[tuple[str, Metadata]],
+        file_path: Path,
+        update_mode: UpdateMode,
+        progress_callback: Any = None,
+    ) -> dict[str, int]:
+        if progress_callback is not None:
+            progress_callback({"added": 1, "updated": 0, "skipped": 0})
+        raise OSError("index batch failed")
+
+    monkeypatch.setattr(
+        pipeline,
+        "add_documents_to_collection",
+        fail_after_storing_one_document,
+    )
+
+    stats = pipeline.process_all_text_data(str(tmp_path))
+
+    assert stats["total_chunks"] == 1
+    assert stats["documents_added"] == 1
+    assert stats["errors"] == 1
+    assert stats["files_processed"] == 0
+    assert stats["missions"]["apollo_11"]["chunks"] == 1
 
 
 @pytest.mark.unit
