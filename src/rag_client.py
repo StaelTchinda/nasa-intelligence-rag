@@ -3,7 +3,7 @@
 import math
 import os
 from pathlib import Path
-from typing import Any, Callable, List, Optional
+from typing import Any, List, Optional
 
 import chromadb
 from chromadb.api.models import Collection as chromadb_collection
@@ -161,11 +161,14 @@ def format_context(
     context_parts = ["Retrieved NASA source excerpts:"]
     metadata_values = metadatas or []
     for index, document in enumerate(documents, start=1):
-        get_metadata: Callable[[str], Optional[Any]] = lambda key: (
-            metadata_values[index - 1].get(key)
-            if index - 1 < len(metadata_values) and (key in metadata_values[index - 1])
-            else None
-        )
+        def get_metadata(key: str) -> Optional[Any]:
+            return (
+                metadata_values[index - 1].get(key)
+                if index - 1 < len(metadata_values)
+                and key in metadata_values[index - 1]
+                else None
+            )
+
         mission = str(get_metadata("mission") or "Unknown")
         mission_label = mission.replace("_", " ").title()
         source = str(get_metadata("source") or get_metadata("file_path") or "Unknown")

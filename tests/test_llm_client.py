@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from typing import Any, Callable, Optional, List, cast
+from typing import Any, Optional, List, cast
 from unittest.mock import patch
 
 import pytest
