@@ -9,9 +9,10 @@ import pytest
 from streamlit.testing.v1 import AppTest
 from openai import APITimeoutError
 
-from src import chat_config, rag_client
+from src import rag_client
+from src.config import chat_config
 from src import llm_client
-from src.chat_config import (
+from src.config.chat_config import (
     CUSTOM_MODEL_OPTION,
     ChatDefaults,
     ChatProvider,

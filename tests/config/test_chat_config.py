@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from src.chat_config import (
+from src.config.chat_config import (
     ChatProvider,
     build_chat_settings,
     build_embedding_settings,
