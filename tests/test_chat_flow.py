@@ -66,3 +66,29 @@ def test_chat_wrapper_preserves_legacy_generation_call() -> None:
         "fake-key", "Question?", "Context", [], "gpt-3.5-turbo"
     )
     assert result == "Legacy-compatible answer"
+
+
+@pytest.mark.unit
+def test_retrieval_wrapper_passes_embedding_provider_settings() -> None:
+    collection = object()
+    result = object()
+    with patch.object(
+        chat.rag_client, "retrieve_documents", return_value=result
+    ) as retrieve_documents:
+        actual = chat.retrieve_documents(
+            collection,
+            "What happened on Apollo 13?",
+            5,
+            openai_key="embedding-key",
+            openai_base_url="http://localhost:11434/v1",
+        )
+
+    retrieve_documents.assert_called_once_with(
+        collection,
+        "What happened on Apollo 13?",
+        5,
+        None,
+        openai_key="embedding-key",
+        openai_base_url="http://localhost:11434/v1",
+    )
+    assert actual is result

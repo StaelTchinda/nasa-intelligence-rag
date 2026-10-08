@@ -2,7 +2,6 @@
 
 import math
 import os
-from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Callable, List, Optional
 
@@ -11,14 +10,8 @@ from chromadb.api.models import Collection as chromadb_collection
 import chromadb.api.types as chromadb_types
 from openai import OpenAI
 
-from src.rag_types import (
-    ChromaBackend,
-    ChromaCollection,
-    Metadata,
-    RetrievalCollection,
-    RetrievalResult,
-    normalize_retrieval_result,
-)
+from src.config.api_config import OPENAI_MAX_RETRIES, OPENAI_REQUEST_TIMEOUT_SECONDS
+from src.rag_types import ChromaBackend
 
 
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
@@ -113,10 +106,15 @@ def retrieve_documents(
             "CHROMA_OPENAI_API_KEY or OPENAI_API_KEY"
         )
 
-    client_options: dict[str, str] = {}
+    client_options: dict[str, Any] = {}
     if openai_base_url:
         client_options["base_url"] = openai_base_url
-    embedding_response = OpenAI(api_key=api_key, **client_options).embeddings.create(
+    embedding_response = OpenAI(
+        api_key=api_key,
+        timeout=OPENAI_REQUEST_TIMEOUT_SECONDS,
+        max_retries=OPENAI_MAX_RETRIES,
+        **client_options,
+    ).embeddings.create(
         model=selected_embedding_model,
         input=query,
     )

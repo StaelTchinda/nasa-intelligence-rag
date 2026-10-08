@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from typing import Any, Optional, List, cast
+from typing import Any, Callable, Optional, List, cast
 from unittest.mock import patch
 
 import pytest
@@ -25,10 +25,52 @@ def test_generate_response_uses_default_model_and_legacy_client_kwargs() -> None
             "fake-key", "What happened?", "Apollo 13 lost oxygen.", []
         )
 
-    openai_client.assert_called_once_with(api_key="fake-key")
+    openai_client.assert_called_once_with(
+        api_key="fake-key", timeout=120.0, max_retries=0
+    )
     request = openai_client.return_value.chat.completions.create.call_args.kwargs
     assert request["model"] == "gpt-3.5-turbo"
     assert response == "Apollo 13 lost oxygen pressure. [Source 1]"
+
+
+@pytest.mark.unit
+def test_generate_response_streams_answer_and_reports_reasoning_without_content() -> None:
+    stream = [
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(content=None, reasoning="private thoughts")
+                )
+            ]
+        ),
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(delta=SimpleNamespace(content="Apollo 13", reasoning=None))
+            ]
+        ),
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(delta=SimpleNamespace(content=" returned safely.", reasoning=None))
+            ]
+        ),
+    ]
+    progress: list[str] = []
+
+    with patch.object(llm_client, "OpenAI") as openai_client:
+        openai_client.return_value.chat.completions.create.return_value = stream
+
+        response = llm_client.generate_response(
+            "fake-key",
+            "What happened?",
+            "Retrieved source.",
+            [],
+            on_progress=progress.append,
+        )
+
+    create_call = openai_client.return_value.chat.completions.create
+    assert create_call.call_args.kwargs["stream"] is True
+    assert response == "Apollo 13 returned safely."
+    assert progress == ["thinking", "answering", "answering"]
 
 
 @pytest.mark.unit
@@ -47,7 +89,10 @@ def test_generate_response_forwards_explicit_openai_base_url() -> None:
         )
 
     openai_client.assert_called_once_with(
-        api_key="ollama", base_url="http://localhost:11434/v1"
+        api_key="ollama",
+        base_url="http://localhost:11434/v1",
+        timeout=120.0,
+        max_retries=0,
     )
 
 
@@ -65,7 +110,9 @@ def test_generate_response_omits_empty_or_none_base_url(
             "fake-key", "Question?", "Context", [], openai_base_url=base_url
         )
 
-    openai_client.assert_called_once_with(api_key="fake-key")
+    openai_client.assert_called_once_with(
+        api_key="fake-key", timeout=120.0, max_retries=0
+    )
 
 
 @pytest.mark.unit

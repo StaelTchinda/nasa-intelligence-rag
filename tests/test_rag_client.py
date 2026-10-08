@@ -131,7 +131,9 @@ def test_retrieve_documents_uses_openai_embedding_and_collection_query() -> None
             collection, "Apollo 13 oxygen", n_results=2, openai_key="test-key"
         )
 
-    openai_client.assert_called_once_with(api_key="test-key")
+    openai_client.assert_called_once_with(
+        api_key="test-key", timeout=120.0, max_retries=0
+    )
     openai_client.return_value.embeddings.create.assert_called_once_with(
         model="text-embedding-3-small", input="Apollo 13 oxygen"
     )
@@ -160,7 +162,10 @@ def test_retrieve_documents_uses_openai_compatible_embedding_endpoint() -> None:
         )
 
     openai_client.assert_called_once_with(
-        api_key="ollama", base_url="http://localhost:11434/v1"
+        api_key="ollama",
+        base_url="http://localhost:11434/v1",
+        timeout=120.0,
+        max_retries=0,
     )
 
 

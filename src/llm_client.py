@@ -1,8 +1,9 @@
-from typing import Any, Optional, List
+from typing import Any, Callable, Optional, List
 
 from openai import OpenAI
 from openai.types.chat.chat_completion_message_param import ChatCompletionMessageParam
 
+from src.config.api_config import OPENAI_MAX_RETRIES, OPENAI_REQUEST_TIMEOUT_SECONDS
 from src.rag_types import ConversationTurn
 
 
@@ -30,6 +31,7 @@ def generate_response(
     conversation_history: List[ConversationTurn],
     model: str = "gpt-3.5-turbo",
     openai_base_url: Optional[str] = None,
+    on_progress: Callable[[str], None] | None = None,
 ) -> str:
     """Generate a grounded NASA mission answer using the OpenAI chat API."""
     messages: list[ChatCompletionMessageParam] = [
@@ -54,14 +56,41 @@ def generate_response(
         client_options["base_url"] = openai_base_url
     client = OpenAI(
         api_key=openai_key,
+        timeout=OPENAI_REQUEST_TIMEOUT_SECONDS,
+        max_retries=OPENAI_MAX_RETRIES,
         **client_options,
     )
-    completion = client.chat.completions.create(model=model, messages=messages)
+    if on_progress is None:
+        completion = client.chat.completions.create(
+            model=model,
+            messages=messages,
+        )
+        try:
+            response = completion.choices[0].message.content
+        except (AttributeError, IndexError, TypeError) as error:
+            raise ValueError("OpenAI returned a malformed chat completion") from error
+    else:
+        response_parts: list[str] = []
+        completion_stream = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            stream=True,
+        )
+        for chunk in completion_stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            if (
+                getattr(delta, "reasoning", None)
+                or getattr(delta, "reasoning_content", None)
+            ):
+                on_progress("thinking")
+            content = delta.content
+            if content:
+                response_parts.append(content)
+                on_progress("answering")
+        response = "".join(response_parts)
 
-    try:
-        response = completion.choices[0].message.content
-    except (AttributeError, IndexError, TypeError) as error:
-        raise ValueError("OpenAI returned a malformed chat completion") from error
-    if response is None:
+    if response is None or not response.strip():
         raise ValueError("OpenAI returned an empty chat completion")
     return response

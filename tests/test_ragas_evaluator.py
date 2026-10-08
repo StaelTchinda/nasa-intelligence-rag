@@ -3,6 +3,11 @@ from unittest.mock import patch
 from src import ragas_evaluator
 
 
+def test_ragas_dependencies_are_importable() -> None:
+    assert ragas_evaluator.RAGAS_AVAILABLE
+    assert ragas_evaluator.evaluate is not None
+
+
 def test_evaluate_response_quality_returns_metric_dict():
     with patch.object(ragas_evaluator, "RAGAS_AVAILABLE", True):
         with patch.object(
