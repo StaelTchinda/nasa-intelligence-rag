@@ -1,0 +1,64 @@
+flowchart LR
+    User[User]
+
+    subgraph App[Application and orchestration]
+        UI[Streamlit UI<br/>src/chat.py: main and display functions]
+        Orchestrator[Request coordinator<br/>currently implemented in chat.py: main]
+        Session[Conversation state<br/>messages, selected backend, settings]
+    end
+
+    subgraph Retrieval[Retrieval domain]
+        Retriever[Semantic retrieval<br/>src/rag_client.py: retrieve_documents]
+        ContextBuilder[Context construction<br/>src/rag_client.py: format_context]
+        BackendDiscovery[Backend selection<br/>src/rag_client.py: discover_chroma_backends and initialize_rag_system]
+    end
+
+    subgraph Generation[Answer generation domain]
+        Generator[Grounded answer generation<br/>src/llm_client.py: generate_response]
+    end
+
+    subgraph Evaluation[Quality evaluation domain]
+        Evaluator[Answer evaluation<br/>src/ragas_evaluator.py: evaluate_response_quality]
+    end
+
+    subgraph Ingestion[Knowledge base building domain]
+        CLI[Ingestion command line<br/>src/embedding_pipeline.py: main]
+        Pipeline[Document processing<br/>ChromaEmbeddingPipelineTextOnly]
+        Metadata[Mission and source metadata<br/>path and filename extraction]
+        Chunker[Chunking<br/>chunk_text]
+        IndexWriter[Embedding and collection writer<br/>get_embedding and add_documents_to_collection]
+    end
+
+    Files[NASA mission text files]
+    VectorDB[(ChromaDB persistent collection)]
+    EmbeddingAPI[OpenAI embeddings API]
+    ChatAPI[OpenAI chat API]
+    RAGAS[RAGAS metrics and evaluator models]
+
+    User --> UI
+    UI --> Orchestrator
+    Orchestrator <--> Session
+    Orchestrator --> BackendDiscovery
+    Orchestrator --> Retriever
+    Retriever --> VectorDB
+    Retriever --> ContextBuilder
+    ContextBuilder --> Orchestrator
+    Orchestrator --> Generator
+    Generator --> ChatAPI
+    ChatAPI --> Generator
+    Generator --> Orchestrator
+    Orchestrator -. optional scoring .-> Evaluator
+    Evaluator --> RAGAS
+    RAGAS --> Evaluator
+    Evaluator --> Orchestrator
+    Orchestrator --> UI
+    UI --> User
+
+    Files --> CLI
+    CLI --> Pipeline
+    Pipeline --> Metadata
+    Metadata --> Chunker
+    Chunker --> IndexWriter
+    IndexWriter --> EmbeddingAPI
+    EmbeddingAPI --> IndexWriter
+    IndexWriter --> VectorDB
