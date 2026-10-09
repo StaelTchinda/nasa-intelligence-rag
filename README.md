@@ -12,67 +12,77 @@ questions about NASA missions from a local ChromaDB collection.
 
 ## Quick start
 
-Prerequisites: Python 3.12 and an API-compatible chat and embedding provider.
-The default setup uses OpenAI; local Ollama setup is described in the
-[provider setup guide](./docs/SETUP.md).
+Prerequisites: Python 3.12. Choose either **online** (OpenAI-hosted chat and
+embeddings) or **local/offline inference** (Ollama running on your machine).
+The local option requires downloading Ollama and its models first; after that,
+chat and embedding requests run locally.
 
-From the repository root, create a virtual environment and install dependencies
-(PowerShell):
+From the repository root, create a virtual environment and install
+dependencies. These commands use POSIX shell syntax and work in Linux and Git
+Bash:
 
-```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
 python -m pip install -r requirements.txt -r requirements-dev.txt
 ```
 
-Create your local environment file from the template, then add your provider
-credentials:
+On Windows, use Git Bash and activate the environment with
+`source .venv/Scripts/activate`. If `python3` is not available in Git Bash, use
+`python` to create the environment. Copy the environment template if you do
+not already have a local `.env`:
 
-```powershell
-Copy-Item .env.example .env
+```bash
+cp .env.example .env
 ```
 
-Only run this when you do not already have a `.env` file, so existing local
-settings are not overwritten.
+Configure the chosen provider in `.env`. Before indexing, export those settings
+into the current shell:
 
-Configure your provider as described under [Configuration](#configuration),
-then index the mission documents as described under
-[Indexing data](#indexing-data). Start the chat application:
+```bash
+set -a
+source .env
+set +a
+```
 
-```powershell
-.\.venv\Scripts\python.exe -m streamlit run src/chat.py
+Then index the mission documents as described under
+[Indexing data](#indexing-data), and start the app:
+
+```bash
+python -m streamlit run src/chat.py
 ```
 
 ## Configuration
 
-Settings can be supplied in a root `.env` file or as process environment
-variables. Process environment variables take precedence. Do not commit real
-API keys.
+Choose and configure one of these provider setups in `.env`:
 
-Use the checked-in [`.env.example`](./.env.example) as the template for your
-local `.env` file. Replace its OpenAI placeholder with your own key, or
-uncomment and fill in the optional OpenAI-compatible/Ollama settings as needed.
-Keep `.env` private; it is ignored by Git.
+### Online setup (OpenAI)
 
-<!-- AUTO-GENERATED: Supported environment variables are sourced from src/config/chat_config.py and src/rag_client.py. -->
+Use OpenAI-hosted chat and embedding APIs. This requires internet access and an
+OpenAI API key:
 
-| Variable | Required | Purpose |
-| --- | --- | --- |
-| `OPENAI_API_KEY` | For native OpenAI chat | OpenAI chat key; also the default key for retrieval embeddings |
-| `OPENAI_CHAT_MODEL` | No | Initial OpenAI chat model (default: `gpt-3.5-turbo`) |
-| `OPENAI_BASE_URL` | No | Base URL for a generic OpenAI-compatible chat endpoint |
-| `OLLAMA_OPENAI_BASE_URL` | No | Ollama-compatible chat endpoint; selects compatible-provider mode |
-| `OLLAMA_CHAT_MODEL` | No | Initial Ollama chat model (default: `llama3.2`) |
-| `OLLAMA_API_KEY` | No | Key for an OpenAI-compatible chat endpoint (defaults to `ollama` if omitted) |
-| `CHROMA_OPENAI_BASE_URL` | No | Custom OpenAI-compatible endpoint for retrieval embeddings |
-| `CHROMA_OPENAI_API_KEY` | No | Retrieval embedding key (falls back to `OPENAI_API_KEY`) |
-<!-- END AUTO-GENERATED -->
+```dotenv
+OPENAI_API_KEY=your-openai-api-key
+OPENAI_CHAT_MODEL=gpt-3.5-turbo
+```
 
-Set the embedding endpoint and key independently when the collection uses a
-custom embedding provider. The embedding model used to query a collection must
-match the model that created its stored vectors. See the
-[provider setup guide](./docs/SETUP.md) for OpenAI-compatible and Ollama
-examples.
+### Local/offline setup (Ollama)
+
+Install Ollama and download the models before using the app offline. Then
+configure Ollama for both chat and retrieval embeddings:
+
+```dotenv
+OLLAMA_OPENAI_BASE_URL=http://localhost:11434/v1
+OLLAMA_CHAT_MODEL=llama3.2
+OLLAMA_API_KEY=ollama
+CHROMA_OPENAI_BASE_URL=http://localhost:11434/v1
+CHROMA_OPENAI_API_KEY=ollama
+```
+
+A starter template with both sets of settings is provided in
+[`.env.example`](./.env.example). See the [provider setup guide](./docs/SETUP.md)
+for installation and indexing steps. Keep `.env` private; it is ignored by
+Git. In the app, process environment variables take precedence over `.env`.
 
 ## Usage
 
@@ -85,28 +95,26 @@ question to the chat model.
 
 ## Indexing data
 
-The repository includes NASA mission text under `data/text`. To index it with
-OpenAI embeddings, set `OPENAI_API_KEY` in the environment and run (PowerShell):
+The repository includes NASA mission text under `data/text`. For online
+indexing, set `OPENAI_API_KEY` in your shell and run:
 
-```powershell
-.\.venv\Scripts\python.exe -m src.embedding_pipeline `
-  --data-path . `
-  --openai-key $env:OPENAI_API_KEY `
-  --chroma-dir .\chroma_db_openai `
+```bash
+python -m src.embedding_pipeline \
+  --data-path . \
+  --openai-key "$OPENAI_API_KEY" \
+  --chroma-dir ./chroma_db_openai \
   --collection-name nasa_space_missions_text
 ```
 
-The default embedding model is `text-embedding-3-small`. For Ollama or another
-compatible embedding provider, supply `--openai-base-url` and select a model
-supported by that endpoint. See the [provider setup guide](./docs/SETUP.md) for
-a complete Ollama example. The embedding model must remain consistent between
-indexing and querying the collection.
+For local Ollama indexing, see the [offline setup steps](./docs/SETUP.md).
+The embedding model used to query a collection must match the model used to
+create its stored vectors.
 
 ## Development and testing
 
 Run the same checks as CI:
 
-```powershell
+```bash
 python -m ruff check src tests
 python -m pytest -k "not ollama"
 ```
