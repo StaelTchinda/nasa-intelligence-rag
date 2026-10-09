@@ -25,6 +25,16 @@ py -3.12 -m venv .venv
 python -m pip install -r requirements.txt -r requirements-dev.txt
 ```
 
+Create your local environment file from the template, then add your provider
+credentials:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Only run this when you do not already have a `.env` file, so existing local
+settings are not overwritten.
+
 Configure your provider as described under [Configuration](#configuration),
 then index the mission documents as described under
 [Indexing data](#indexing-data). Start the chat application:
@@ -38,6 +48,11 @@ then index the mission documents as described under
 Settings can be supplied in a root `.env` file or as process environment
 variables. Process environment variables take precedence. Do not commit real
 API keys.
+
+Use the checked-in [`.env.example`](./.env.example) as the template for your
+local `.env` file. Replace its OpenAI placeholder with your own key, or
+uncomment and fill in the optional OpenAI-compatible/Ollama settings as needed.
+Keep `.env` private; it is ignored by Git.
 
 <!-- AUTO-GENERATED: Supported environment variables are sourced from src/config/chat_config.py and src/rag_client.py. -->
 
